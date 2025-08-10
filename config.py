@@ -25,9 +25,9 @@ class Config:
     SQLALCHEMY_DATABASE_URI = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
-    # AI/LLM settings
-    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')
+    # AI/LLM settings (Cohere)
+    COHERE_API_KEY = os.getenv('COHERE_API_KEY')
+    COHERE_MODEL = os.getenv('COHERE_MODEL', 'command-r')
     
     # Redis settings (for caching/background tasks)
     REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')

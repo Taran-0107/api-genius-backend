@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Genius - Full Feature Tester</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="//unpkg.com/alpinejs" defer></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        [x-cloak] { display: none !important; }
+        .sidebar-link { transition: all 0.2s ease; }
+        .sidebar-link-active { background-color: #4f46e5; color: white; }
+        .sidebar-link:not(.sidebar-link-active):hover { background-color: #eef2ff; color: #3730a3; }
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4f46e5;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-100" x-data="apiGeniusTester">
+
+    <div class="flex h-screen bg-gray-100">
+        <!-- Sidebar -->
+        <aside class="w-64 flex-shrink-0 bg-white border-r flex flex-col">
+            <div class="h-16 flex items-center justify-center border-b px-4">
+                 <div class="flex items-center space-x-2">
+                    <svg class="w-8 h-8 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.375a6.375 6.375 0 006.375-6.375V9.75A6.375 6.375 0 0012 3.375z" /><path stroke-linecap="round" stroke-linejoin="round" d="M12 3.375a6.375 6.375 0 00-6.375 6.375V12m6.375 6.375v3.75m-6.375-3.75V12m0 0a6.375 6.375 0 016.375 6.375m-6.375 0a6.375 6.375 0 01-6.375-6.375m6.375 0v-3.75" /></svg>
+                    <h1 class="text-xl font-bold text-gray-900">API Genius</h1>
+                </div>
+            </div>
+            <nav class="flex-1 px-4 py-4 space-y-2">
+                <a href="#" @click.prevent="activeTab = 'discover'" :class="{ 'sidebar-link-active': activeTab === 'discover' }" class="sidebar-link flex items-center px-4 py-2 text-gray-700 rounded-md">Discover APIs</a>
+                <a href="#" @click.prevent="activeTab = 'community'" :class="{ 'sidebar-link-active': activeTab === 'community' }" class="sidebar-link flex items-center px-4 py-2 text-gray-700 rounded-md">Community Q&A</a>
+                <a href="#" @click.prevent="activeTab = 'assistant'" :class="{ 'sidebar-link-active': activeTab === 'assistant' }" class="sidebar-link flex items-center px-4 py-2 text-gray-700 rounded-md">AI Assistant</a>
+                <a href="#" @click.prevent="activeTab = 'keyManager'" :class="{ 'sidebar-link-active': activeTab === 'keyManager' }" class="sidebar-link flex items-center px-4 py-2 text-gray-700 rounded-md">API Key Manager</a>
+            </nav>
+            <div class="px-4 py-4 border-t">
+                 <div x-show="!user" class="text-center">
+                    <button @click="showAuthModal = true" class="w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-indigo-700 transition">Login / Register</button>
+                 </div>
+                 <div x-show="user" class="space-y-3">
+                    <p class="text-sm font-medium text-center" x-text="`Welcome, ${user.username}`"></p>
+                    <button @click="logout()" class="w-full bg-red-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-600 transition">Logout</button>
+                 </div>
+            </div>
+        </aside>
+
+        <!-- Main content -->
+        <main class="flex-1 flex flex-col overflow-hidden">
+            <div class="flex-1 overflow-y-auto p-8">
+                <div x-cloak>
+                    <!-- Discover Tab -->
+                    <div x-show="activeTab === 'discover'">
+                        <h1 class="text-3xl font-bold mb-6">Discover APIs</h1>
+                        <div class="flex space-x-2 mb-6">
+                            <input x-model="searchQuery" @keydown.enter="searchAPIs()" type="text" placeholder="Describe a task or API name..." class="w-full p-3 border border-gray-300 rounded-lg">
+                            <button @click="searchAPIs()" class="bg-gray-800 text-white font-bold py-2 px-6 rounded-lg hover:bg-gray-900">Search</button>
+                            <button @click="browseAllApis()" class="bg-indigo-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-indigo-600">Browse All</button>
+                        </div>
+                        <div id="apiListContainer"></div>
+                    </div>
+
+                    <!-- Community Tab -->
+                    <div x-show="activeTab === 'community'">
+                        <h1 class="text-3xl font-bold mb-6">Community Q&A</h1>
+                         <div class="bg-white p-6 rounded-lg shadow-md">
+                            <h2 class="text-xl font-semibold mb-4">Ask a Question</h2>
+                            <div class="space-y-2">
+                                <input type="text" x-model="newQuestion.title" placeholder="Question Title..." class="w-full p-2 border rounded-lg" :disabled="!user">
+                                <textarea x-model="newQuestion.body_md" placeholder="Describe your issue in detail..." class="w-full p-2 border rounded-lg" rows="3" :disabled="!user"></textarea>
+                            </div>
+                            <button @click="postQuestion" class="mt-2 bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg" :disabled="!user">Post Question</button>
+                            <p x-show="!user" class="text-sm text-red-500 mt-1">Please log in to ask a question.</p>
+                        </div>
+                        <div class="mt-8">
+                            <h2 class="text-xl font-semibold mb-4">Recent Questions</h2>
+                            <div id="questionListContainer" class="space-y-4"></div>
+                        </div>
+                    </div>
+
+                    <!-- AI Assistant Tab -->
+                    <div x-show="activeTab === 'assistant'">
+                        <h1 class="text-3xl font-bold mb-6">AI Assistant</h1>
+                        <div class="bg-white p-6 rounded-lg shadow-md">
+                            <h2 class="text-xl font-semibold mb-4">Get API Recommendations</h2>
+                            <textarea x-model="recommendationQuery" placeholder="Describe your problem..." class="w-full p-3 border rounded-lg" rows="4"></textarea>
+                            <button @click="getRecommendations()" class="mt-4 w-full bg-indigo-600 text-white font-bold py-3 px-4 rounded-lg" :disabled="!user">Get Recommendations</button>
+                            <p x-show="!user" class="text-sm text-red-500 mt-1 text-center">Please log in to use the AI Assistant.</p>
+                            <div id="recommendationListContainer" class="mt-6"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Key Manager Tab -->
+                    <div x-show="activeTab === 'keyManager'">
+                        <h1 class="text-3xl font-bold mb-6">API Key Manager (Local Simulation)</h1>
+                        <div class="bg-white p-6 rounded-lg shadow-md">
+                            <h2 class="text-xl font-semibold mb-4">Add New Key</h2>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <input x-model="newKey.name" placeholder="Key Name (e.g., Stripe)" class="p-2 border rounded-lg">
+                                <input x-model="newKey.value" placeholder="API Key Value" class="p-2 border rounded-lg">
+                                <button @click="addApiKey" class="bg-green-600 text-white font-bold py-2 px-4 rounded-lg">Add Key</button>
+                            </div>
+                        </div>
+                         <div class="mt-8">
+                            <h2 class="text-xl font-semibold mb-4">Your Saved Keys</h2>
+                            <div class="space-y-2">
+                                <template x-for="(key, index) in apiKeys" :key="index">
+                                    <div class="bg-white p-4 rounded-lg shadow flex justify-between items-center">
+                                        <span class="font-mono" x-text="key.name"></span>
+                                        <button @click="removeApiKey(index)" class="text-red-500 hover:text-red-700">Remove</button>
+                                    </div>
+                                </template>
+                                <template x-if="apiKeys.length === 0">
+                                    <p class="text-center text-gray-500 py-4">No API keys saved.</p>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Code Generator Tab -->
+                    <div x-show="activeTab === 'codeGenerator'">
+                        <button @click="activeTab = 'discover'" class="mb-6 bg-gray-200 text-gray-800 font-bold py-2 px-4 rounded-lg hover:bg-gray-300">&larr; Back to Discover</button>
+                        <h1 class="text-3xl font-bold mb-2">Code Playground</h1>
+                        <p class="mb-6 text-gray-600">Generating code for: <strong x-text="selectedApi?.name"></strong></p>
+                        
+                        <div class="bg-white p-6 rounded-lg shadow-md">
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div class="md:col-span-1 space-y-4">
+                                    <h2 class="text-xl font-semibold">1. Describe Your Task</h2>
+                                    <textarea x-model="codeGen.task" placeholder="e.g., Send an SMS to +123456789 with the message 'Hello World'" class="w-full p-2 border rounded-lg" rows="5"></textarea>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700">Language</label>
+                                        <input type="text" x-model="codeGen.language" class="w-full p-2 border rounded-lg mt-1">
+                                    </div>
+                                    <button @click="generateCode()" class="w-full bg-indigo-600 text-white font-bold py-3 px-4 rounded-lg" :disabled="!user">Generate Code</button>
+                                    <p x-show="!user" class="text-sm text-red-500 mt-1 text-center">Please log in to generate code.</p>
+                                </div>
+                                <div class="md:col-span-2">
+                                    <h2 class="text-xl font-semibold mb-4">2. Generated Code</h2>
+                                    <div class="bg-gray-900 text-white p-4 rounded-lg min-h-[200px]">
+                                        <pre><code x-text="codeGen.result || 'Code will appear here...'"></code></pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div x-cloak>
+        <!-- Auth Modal -->
+        <div x-show="showAuthModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+            <div @click.away="showAuthModal = false" class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+                <div x-data="{ authTab: 'login' }">
+                    <div class="flex border-b mb-4">
+                        <button @click="authTab = 'login'" :class="{ 'border-indigo-600 text-indigo-600': authTab === 'login' }" class="flex-1 py-2 px-4 border-b-2 font-medium">Login</button>
+                        <button @click="authTab = 'register'" :class="{ 'border-indigo-600 text-indigo-600': authTab === 'register' }" class="flex-1 py-2 px-4 border-b-2 font-medium">Register</button>
+                    </div>
+                    <div x-show="authTab === 'login'" class="space-y-4">
+                        <input x-model="login.username" type="text" placeholder="Username or Email" class="w-full p-2 border rounded-lg">
+                        <input x-model="login.password" type="password" placeholder="Password" class="w-full p-2 border rounded-lg">
+                        <button @click="handleLogin()" class="w-full bg-green-600 text-white font-bold py-2 px-4 rounded-lg">Login</button>
+                    </div>
+                    <div x-show="authTab === 'register'" class="space-y-4">
+                        <input x-model="register.username" type="text" placeholder="Username" class="w-full p-2 border rounded-lg">
+                        <input x-model="register.email" type="email" placeholder="Email" class="w-full p-2 border rounded-lg">
+                        <input x-model="register.password" type="password" placeholder="Password" class="w-full p-2 border rounded-lg">
+                        <button @click="handleRegister()" class="w-full bg-purple-600 text-white font-bold py-2 px-4 rounded-lg">Register</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- API Detail Modal -->
+        <div x-show="showDetailModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+            <div @click.away="showDetailModal = false" class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+                <div class="p-4 border-b flex justify-between items-center">
+                    <h3 class="text-2xl font-semibold" x-text="selectedApi?.name"></h3>
+                    <button @click="showDetailModal = false" class="text-2xl">&times;</button>
+                </div>
+                <div class="p-6 overflow-y-auto">
+                    <div class="space-y-6">
+                        <div>
+                            <h4 class="font-semibold text-lg mb-2">Description</h4>
+                            <p x-text="selectedApi?.description"></p>
+                        </div>
+                         <div>
+                            <h4 class="font-semibold text-lg mb-2">Details</h4>
+                            <div class="text-sm space-y-1">
+                                <p><strong class="font-medium">Category:</strong> <span x-text="selectedApi?.category || 'N/A'"></span></p>
+                                <p><strong class="font-medium">Homepage:</strong> <a :href="selectedApi?.homepage_url" target="_blank" class="text-indigo-600 hover:underline" x-text="selectedApi?.homepage_url"></a></p>
+                                <p><strong class="font-medium">Docs:</strong> <a :href="selectedApi?.docs_url" target="_blank" class="text-indigo-600 hover:underline" x-text="selectedApi?.docs_url"></a></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    function apiGeniusTester() {
+        return {
+            // State
+            activeTab: 'discover',
+            user: null,
+            jwtToken: null,
+            showAuthModal: false,
+            showDetailModal: false,
+            selectedApi: null,
+            searchQuery: '',
+            recommendationQuery: '',
+            apiKeys: [],
+            newKey: { name: '', value: '' },
+            newQuestion: { title: '', body_md: '' },
+            login: { username: '', password: '' },
+            register: { username: '', email: '', password: '' },
+            codeGen: { task: '', language: 'python', result: '' },
+
+            // Init
+            init() {
+                this.jwtToken = localStorage.getItem('jwtToken');
+                const userData = localStorage.getItem('user');
+                if (this.jwtToken && userData) this.user = JSON.parse(userData);
+                
+                const savedKeys = localStorage.getItem('apiKeys');
+                if (savedKeys) this.apiKeys = JSON.parse(savedKeys);
+
+                this.fetchQuestions();
+            },
+
+            // API Helper
+            async apiFetch(endpoint, options = {}) {
+                const headers = { 'Content-Type': 'application/json', ...options.headers };
+                if (this.jwtToken) headers['Authorization'] = `Bearer ${this.jwtToken}`;
+                const response = await fetch(`/api${endpoint}`, { ...options, headers });
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error || 'An unknown error occurred');
+                }
+                return response.json();
+            },
+
+            // Auth
+            handleLogin() {
+                this.apiFetch('/auth/login', { method: 'POST', body: JSON.stringify(this.login) })
+                    .then(data => {
+                        this.user = data.user;
+                        this.jwtToken = data.access_token;
+                        localStorage.setItem('user', JSON.stringify(data.user));
+                        localStorage.setItem('jwtToken', data.access_token);
+                        this.showAuthModal = false;
+                    }).catch(err => alert(`Login Failed: ${err.message}`));
+            },
+            handleRegister() {
+                this.apiFetch('/auth/register', { method: 'POST', body: JSON.stringify(this.register) })
+                    .then(data => {
+                        this.user = data.user;
+                        this.jwtToken = data.access_token;
+                        localStorage.setItem('user', JSON.stringify(data.user));
+                        localStorage.setItem('jwtToken', data.access_token);
+                        this.showAuthModal = false;
+                    }).catch(err => alert(`Registration Failed: ${err.message}`));
+            },
+            logout() {
+                this.user = null;
+                this.jwtToken = null;
+                localStorage.clear();
+            },
+
+            // API Discovery
+            searchAPIs() {
+                if (!this.searchQuery.trim()) return;
+                const container = document.getElementById('apiListContainer');
+                container.innerHTML = `<div class="flex flex-col items-center p-8"><div class="loader"></div><p class="mt-4">Searching for '${this.searchQuery}'...</p></div>`;
+                this.apiFetch(`/apis?search=${encodeURIComponent(this.searchQuery)}`)
+                    .then(data => this.renderApiCards(data.apis, container))
+                    .catch(err => container.innerHTML = `<p class="text-red-500 text-center">${err.message}</p>`);
+            },
+            browseAllApis() {
+                const container = document.getElementById('apiListContainer');
+                container.innerHTML = `<div class="flex flex-col items-center p-8"><div class="loader"></div><p class="mt-4">Fetching all APIs from database...</p></div>`;
+                this.apiFetch(`/apis`)
+                    .then(data => this.renderApiCards(data.apis, container, "All APIs in Database"))
+                    .catch(err => container.innerHTML = `<p class="text-red-500 text-center">${err.message}</p>`);
+            },
+
+            // Community
+            fetchQuestions() {
+                const container = document.getElementById('questionListContainer');
+                container.innerHTML = `<div class="flex justify-center p-8"><div class="loader"></div></div>`;
+                this.apiFetch('/questions')
+                    .then(data => this.renderQuestions(data.questions, container))
+                    .catch(err => container.innerHTML = `<p class="text-red-500 text-center">${err.message}</p>`);
+            },
+            postQuestion() {
+                if (!this.newQuestion.title.trim()) return;
+                this.apiFetch('/questions', { method: 'POST', body: JSON.stringify(this.newQuestion) })
+                    .then(() => {
+                        this.newQuestion.title = '';
+                        this.newQuestion.body_md = '';
+                        this.fetchQuestions();
+                    }).catch(err => alert(`Error: ${err.message}`));
+            },
+
+            // AI Assistant
+            getRecommendations() {
+                if (!this.recommendationQuery.trim()) return;
+                const container = document.getElementById('recommendationListContainer');
+                container.innerHTML = `<div class="flex justify-center p-8"><div class="loader"></div></div>`;
+                this.apiFetch('/ai/recommend-apis', { method: 'POST', body: JSON.stringify({ description: this.recommendationQuery }) })
+                    .then(data => this.renderApiCards(data.apis, container, "AI Recommendations"))
+                    .catch(err => container.innerHTML = `<p class="text-red-500 text-center">${err.message}</p>`);
+            },
+            generateCode() {
+                if (!this.codeGen.task.trim()) return;
+                this.codeGen.result = 'Generating...';
+                const payload = {
+                    api_id: this.selectedApi.id,
+                    language: this.codeGen.language,
+                    description: this.codeGen.task
+                };
+                this.apiFetch('/ai/generate-code', { method: 'POST', body: JSON.stringify(payload) })
+                    .then(data => {
+                        this.codeGen.result = data.code;
+                    }).catch(err => this.codeGen.result = `Error: ${err.message}`);
+            },
+
+            // Key Manager
+            addApiKey() {
+                if (!this.newKey.name.trim() || !this.newKey.value.trim()) return;
+                this.apiKeys.push({ ...this.newKey });
+                localStorage.setItem('apiKeys', JSON.stringify(this.apiKeys));
+                this.newKey = { name: '', value: '' };
+            },
+            removeApiKey(index) {
+                this.apiKeys.splice(index, 1);
+                localStorage.setItem('apiKeys', JSON.stringify(this.apiKeys));
+            },
+
+            // Rendering & Modals
+            openDetailModal(api) {
+                this.selectedApi = api;
+                this.showDetailModal = true;
+            },
+            openCodeGenerator(api) {
+                this.selectedApi = api;
+                this.codeGen.task = '';
+                this.codeGen.result = '';
+                this.activeTab = 'codeGenerator';
+            },
+            renderApiCards(apis, container, title) {
+                container.innerHTML = '';
+                if (title) container.innerHTML += `<h2 class="text-xl font-semibold mb-4">${title}</h2>`;
+                if (!apis || apis.length === 0) {
+                    container.innerHTML += '<p class="text-center text-gray-500 py-4">No APIs found.</p>';
+                    return;
+                }
+                const grid = document.createElement('div');
+                grid.className = 'grid grid-cols-1 lg:grid-cols-2 gap-6';
+                apis.forEach(api => {
+                    const card = document.createElement('div');
+                    card.className = 'bg-white p-4 rounded-lg shadow hover:shadow-lg transition flex flex-col';
+                    
+                    const detailButton = document.createElement('button');
+                    detailButton.className = 'text-sm bg-gray-200 font-semibold py-1 px-3 rounded-md hover:bg-gray-300';
+                    detailButton.textContent = 'View Details';
+                    detailButton.onclick = () => this.openDetailModal(api);
+
+                    const codeButton = document.createElement('button');
+                    codeButton.className = 'text-sm bg-indigo-600 text-white font-semibold py-1 px-3 rounded-md hover:bg-indigo-700 ml-2';
+                    codeButton.textContent = 'Generate Code';
+                    codeButton.onclick = () => this.openCodeGenerator(api);
+
+                    const cardContent = `
+                        <div class="flex-grow">
+                            <h3 class="font-bold text-lg text-indigo-700">${api.name}</h3>
+                            <p class="text-sm text-gray-600 mt-1 h-10">${api.description || ''}</p>
+                        </div>
+                        <div class="mt-4 flex justify-end">
+                        </div>
+                    `;
+                    card.innerHTML = cardContent;
+                    const buttonContainer = card.querySelector('.justify-end');
+                    buttonContainer.appendChild(detailButton);
+                    buttonContainer.appendChild(codeButton);
+                    grid.appendChild(card);
+                });
+                container.appendChild(grid);
+            },
+            renderQuestions(questions, container) {
+                container.innerHTML = '';
+                if (!questions || questions.length === 0) {
+                    container.innerHTML = '<p class="text-center text-gray-500 py-4">No questions yet.</p>';
+                    return;
+                }
+                questions.forEach(q => {
+                    const item = document.createElement('div');
+                    item.className = 'bg-white p-4 rounded-lg shadow';
+                    item.innerHTML = `
+                        <h3 class="font-semibold">${q.title}</h3>
+                        <p class="text-sm text-gray-500">Asked by ${q.username} &bull; ${q.answer_count} answers</p>
+                    `;
+                    container.appendChild(item);
+                });
+            }
+        }
+    }
+
+    document.addEventListener('alpine:init', () => {
+        Alpine.data('apiGeniusTester', apiGeniusTester);
+    });
+    </script>
+</body>
+</html>

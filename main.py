@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 import logging
 from functools import lru_cache
+from urllib.parse import urljoin
+import requests # Added for URL validation
 
 from flask import Flask, request, jsonify, g, render_template
 from flask_cors import CORS
@@ -231,13 +233,8 @@ class ApiDiscoveryAgent:
         print("\n--- STEP 1: GENERATING SEARCH QUERIES ---")
         prompt = f"""
         As an expert developer, your task is to find the best API for a given problem.
-        Based on the user's request, generate 3 diverse and high-quality web search queries to find the official API documentation.
-        Think step-by-step:
-        1. Identify the core task (e.g., 'sending email', 'processing payments').
-        2. Create a query for the most popular provider (e.g., "Twilio SMS API docs").
-        3. Create a broader query comparing options (e.g., "best developer API for SMS").
-        4. Create a technical query for implementation (e.g., "how to send sms with python requests api").
-
+        Based on the user's request, generate 3 diverse and high-quality web search queries to find the official API documentation, developer portal, or getting started guide.
+        
         User request: "{user_query}"
         
         Return ONLY a JSON list of 3 string queries.
@@ -292,6 +289,37 @@ class ApiDiscoveryAgent:
             print(f"⚠️ Failed to scrape {url}: {e}")
             return ""
 
+    def _validate_content_relevance(self, content: str, user_query: str) -> bool:
+        """Uses an LLM to quickly check if the content appears to be API documentation."""
+        print("\n--- STEP 3.5: VALIDATING CONTENT RELEVANCE ---")
+        prompt = f"""
+        Based on the user query "{user_query}", does the following text appear to be technical API documentation, a developer portal, or a getting-started guide?
+        Answer with only "yes" or "no".
+
+        Text snippet:
+        ---
+        {content[:1500]}
+        ---
+        """
+        try:
+            response = llm.invoke(prompt)
+            answer = response.content.strip().lower()
+            print(f"LLM validation result: '{answer}'")
+            return "yes" in answer
+        except Exception as e:
+            print(f"⚠️ Content validation failed: {e}")
+            return False
+
+    def _verify_url_is_working(self, url: str) -> bool:
+        """Checks if a URL is live and returns a 200 status code."""
+        try:
+            response = requests.head(url, timeout=5, allow_redirects=True)
+            if response.status_code == 200:
+                return True
+            return False
+        except requests.RequestException:
+            return False
+
     def _extract_api_info_with_llm(self, content: str, user_query: str) -> Optional[Dict]:
         """Uses an LLM to parse scraped content into a structured API format."""
         print("\n--- STEP 4: EXTRACTING INFO WITH LLM ---")
@@ -324,6 +352,41 @@ class ApiDiscoveryAgent:
             print(f"⚠️ Failed to extract API info with LLM. Error: {e}")
             return None
 
+    def _find_and_verify_docs_url(self, api_data: Dict) -> str:
+        """Finds and verifies the best documentation URL."""
+        print("\n--- STEP 4.5: FINDING & VERIFYING DOCS URL ---")
+        base_url = api_data.get('homepage_url')
+        if not base_url:
+            print("⚠️ No homepage URL to search for docs.")
+            return api_data.get('docs_url')
+
+        print(f"Searching for docs link on: {base_url}")
+        try:
+            self.driver.get(base_url)
+            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+            
+            # Find all links with keywords
+            keywords = ['docs', 'documentation', 'api', 'developer', 'reference']
+            potential_links = []
+            for a in soup.find_all('a', href=True):
+                if any(keyword in a.text.lower() or keyword in a['href'].lower() for keyword in keywords):
+                    potential_links.append(urljoin(base_url, a['href']))
+            
+            print(f"Found potential docs links: {potential_links}")
+
+            # Validate the most promising link
+            if potential_links:
+                best_link = potential_links[0]
+                content = self._scrape_url_content(best_link)
+                if self._validate_content_relevance(content, api_data['name']):
+                    print(f"✅ Verified new docs URL: {best_link}")
+                    return best_link
+        except Exception as e:
+            print(f"⚠️ Error while searching for docs link: {e}")
+
+        print("⚠️ Could not verify a better docs URL, using original.")
+        return api_data.get('docs_url')
+
     def _save_api_to_db(self, api_data: Dict) -> str:
         """Saves the newly discovered API to the database and creates an embedding."""
         print("\n--- STEP 5: SAVING TO DATABASE ---")
@@ -353,11 +416,11 @@ class ApiDiscoveryAgent:
         
         return api_id
 
-    def run(self, user_query: str) -> Optional[Dict]:
-        """Executes the full discovery workflow."""
+    def run(self, user_query: str) -> None:
+        """Executes the full discovery workflow for all found URLs."""
         if not self.driver:
             print("❌ Discovery Agent cannot run because WebDriver is not initialized.")
-            return None
+            return
             
         print(f"\n\n{'='*20} 🚀 AGENT WORKFLOW STARTED 🚀 {'='*20}")
         print(f"User Query: '{user_query}'")
@@ -366,22 +429,45 @@ class ApiDiscoveryAgent:
         urls = self._search_web_for_urls(search_queries)
         if not urls:
             print(f"\n{'='*20} 🏁 AGENT WORKFLOW FINISHED 🏁 {'='*20}\n")
-            return None
+            return
 
-        for url in urls:
-            content = self._scrape_url_content(url)
+        apis_found_count = 0
+        for scraped_url in urls:
+            content = self._scrape_url_content(scraped_url)
             if not content:
+                continue
+
+            if not self._validate_content_relevance(content, user_query):
+                print(f"❌ Content from {scraped_url} is not relevant. Discarding.")
                 continue
             
             extracted_info = self._extract_api_info_with_llm(content, user_query)
             if extracted_info:
-                new_api_id = self._save_api_to_db(extracted_info)
-                new_api = DatabaseManager.execute_query("SELECT * FROM apis WHERE id = :id", {'id': new_api_id})
-                print(f"\n{'='*20} ✅ AGENT WORKFLOW SUCCESSFUL ✅ {'='*20}\n")
-                return new_api[0] if new_api else None
+                print("\n--- STEP 4.7: VALIDATING EXTRACTED URLS ---")
+                homepage_url = extracted_info.get('homepage_url')
+                docs_url = extracted_info.get('docs_url')
+
+                if homepage_url and not self._verify_url_is_working(homepage_url):
+                    print(f"⚠️ Homepage URL {homepage_url} is not working. Correcting with scraped URL.")
+                    extracted_info['homepage_url'] = scraped_url
+                else:
+                    print("✅ Homepage URL is valid.")
+
+                if docs_url and not self._verify_url_is_working(docs_url):
+                    print(f"⚠️ Docs URL {docs_url} is not working. Correcting with scraped URL.")
+                    extracted_info['docs_url'] = scraped_url
+                else:
+                    print("✅ Docs URL is valid.")
+                
+                verified_docs_url = self._find_and_verify_docs_url(extracted_info)
+                extracted_info['docs_url'] = verified_docs_url
+
+                self._save_api_to_db(extracted_info)
+                apis_found_count += 1
         
-        print(f"\n{'='*20} 🏁 AGENT WORKFLOW FINISHED (No API extracted) 🏁 {'='*20}\n")
-        return None
+        print(f"\n{'='*20} 🏁 AGENT WORKFLOW FINISHED 🏁 {'='*20}")
+        print(f"Found and saved {apis_found_count} new API(s).\n")
+        return
 
     def __del__(self):
         """Ensure the browser is closed when the agent is destroyed."""
@@ -397,14 +483,26 @@ class LLMService:
     """LangChain LLM service for various AI tasks"""
     
     @staticmethod
-    @lru_cache(maxsize=128) # Simple in-memory cache
-    def generate_code(api_description: str, language: str = 'python') -> str:
-        """Generate code snippet for API integration"""
+    @lru_cache(maxsize=128)
+    def generate_code(api_description: str, language: str, user_task: str, docs_content: str = "") -> str:
+        """Generate code snippet for API integration, using docs content if available."""
         prompt = f"""
-        Generate a {language} code snippet to integrate with the following API:
+        You are an expert developer tasked with writing a code snippet.
+        
+        **API Information:**
         {api_description}
         
-        Include error handling and best practices.
+        **User's Task:**
+        {user_task}
+        
+        **Full API Documentation (for context):**
+        ---
+        {docs_content[:8000]}
+        ---
+        
+        Based on the user's task and the provided documentation, generate a clean, runnable code snippet in {language}.
+        The code should be complete and include necessary imports and error handling.
+        Prioritize using examples from the documentation if available.
         """
         
         try:
@@ -743,18 +841,26 @@ def generate_code():
         data = request.get_json()
         api_id = data.get('api_id')
         language = data.get('language', 'python')
-        description = data.get('description', '')
+        user_task = data.get('description', '')
         
-        api_info = DatabaseManager.execute_query(
+        api_info_list = DatabaseManager.execute_query(
             "SELECT name, description, docs_url FROM apis WHERE id = :api_id",
             {'api_id': api_id}
         )
         
-        if not api_info:
+        if not api_info_list:
             return jsonify({'error': 'API not found'}), 404
         
-        api_desc = f"API: {api_info[0]['name']}\nDescription: {api_info[0]['description']}\nTask: {description}"
-        code = LLMService.generate_code(api_desc, language)
+        api_info = api_info_list[0]
+        api_description = f"API: {api_info['name']}\nDescription: {api_info['description']}"
+        
+        # Scrape the docs page for context
+        docs_content = ""
+        if api_info.get('docs_url'):
+            agent = ApiDiscoveryAgent()
+            docs_content = agent._scrape_url_content(api_info['docs_url'])
+
+        code = LLMService.generate_code(api_description, language, user_task, docs_content)
         
         return jsonify({'code': code})
         

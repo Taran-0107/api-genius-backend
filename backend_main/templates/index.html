@@ -132,7 +132,7 @@
                         
                         <div class="bg-white p-6 rounded-lg shadow-md">
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                <div class="md:col-span-1 space-y-4">
+                                <div class="md-col-span-1 space-y-4">
                                     <h2 class="text-xl font-semibold">1. Describe Your Task</h2>
                                     <textarea x-model="codeGen.task" placeholder="e.g., Send an SMS to +123456789 with the message 'Hello World'" class="w-full p-2 border rounded-lg" rows="5"></textarea>
                                     <div>
@@ -142,7 +142,7 @@
                                     <button @click="generateCode()" class="w-full bg-indigo-600 text-white font-bold py-3 px-4 rounded-lg" :disabled="!user">Generate Code</button>
                                     <p x-show="!user" class="text-sm text-red-500 mt-1 text-center">Please log in to generate code.</p>
                                 </div>
-                                <div class="md:col-span-2">
+                                <div class="md-col-span-2">
                                     <h2 class="text-xl font-semibold mb-4">2. Generated Code</h2>
                                     <div class="bg-gray-900 text-white p-4 rounded-lg min-h-[200px]">
                                         <pre><code x-text="codeGen.result || 'Code will appear here...'"></code></pre>
@@ -235,7 +235,12 @@
                 const savedKeys = localStorage.getItem('apiKeys');
                 if (savedKeys) this.apiKeys = JSON.parse(savedKeys);
 
-                this.fetchQuestions();
+                // Fetch questions when the community tab is first viewed
+                this.$watch('activeTab', (value) => {
+                    if (value === 'community') {
+                        this.fetchQuestions();
+                    }
+                });
             },
 
             // API Helper
@@ -282,14 +287,20 @@
                 if (!this.searchQuery.trim()) return;
                 const container = document.getElementById('apiListContainer');
                 container.innerHTML = `<div class="flex flex-col items-center p-8"><div class="loader"></div><p class="mt-4">Searching for '${this.searchQuery}'...</p></div>`;
-                this.apiFetch(`/apis?search=${encodeURIComponent(this.searchQuery)}`)
-                    .then(data => this.renderApiCards(data.apis, container))
-                    .catch(err => container.innerHTML = `<p class="text-red-500 text-center">${err.message}</p>`);
+                
+                // *** THIS IS THE FIX ***
+                // Use POST for /apis/discover and GET for /apis/fromdb with search
+                this.apiFetch('/apis/discover', { 
+                    method: 'POST', 
+                    body: JSON.stringify({ search: this.searchQuery }) 
+                })
+                .then(data => this.renderApiCards(data.apis, container))
+                .catch(err => container.innerHTML = `<p class="text-red-500 text-center">${err.message}</p>`);
             },
             browseAllApis() {
                 const container = document.getElementById('apiListContainer');
                 container.innerHTML = `<div class="flex flex-col items-center p-8"><div class="loader"></div><p class="mt-4">Fetching all APIs from database...</p></div>`;
-                this.apiFetch(`/apis`)
+                this.apiFetch(`/apis/fromdb`)
                     .then(data => this.renderApiCards(data.apis, container, "All APIs in Database"))
                     .catch(err => container.innerHTML = `<p class="text-red-500 text-center">${err.message}</p>`);
             },
@@ -297,6 +308,7 @@
             // Community
             fetchQuestions() {
                 const container = document.getElementById('questionListContainer');
+                if (!container) return; // Don't fetch if container isn't visible
                 container.innerHTML = `<div class="flex justify-center p-8"><div class="loader"></div></div>`;
                 this.apiFetch('/questions')
                     .then(data => this.renderQuestions(data.questions, container))

@@ -48,7 +48,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-from config import config
+from backend_main.config import config
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -558,54 +558,43 @@ class LLMService:
 # --- FLASK ROUTES ---
 # ==============================================================================
 
-@app.route('/api/apis', methods=['GET'])
+# --- 1. Database-only GET route ---
+@app.route('/api/apis/fromdb', methods=['GET'])
 def get_apis():
     """
-    Get list of APIs. Triggers the ApiDiscoveryAgent on every search to find
-    and store new APIs before querying the local database with an improved
-    search strategy (exact match first, then semantic).
+    Get list of APIs from the database only.
+    Supports search, category, pagination.
     """
     try:
         search_query = request.args.get('search', '')
         category = request.args.get('category', '')
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 20))
-        
+
         apis = []
         params = {}
-        
-        # --- AGENTIC WORKFLOW & IMPROVED SEARCH LOGIC ---
-        if search_query:
-            # Step 1: ALWAYS run the agent to discover and store new APIs from the web.
-            agent = ApiDiscoveryAgent()
-            agent.run(search_query) # This saves new APIs to the DB, we don't need its return value here.
 
-            # Step 2: Now, query the database which may contain the newly added API.
-            # Prioritize exact name matches for precision.
-            base_query = """
-            SELECT a.*, 
-                   AVG(ar.latency_score) as avg_latency, AVG(ar.ease_of_use) as avg_ease_of_use,
-                   AVG(ar.docs_quality) as avg_docs_quality, AVG(ar.cost_efficiency) as avg_cost_efficiency,
-                   COUNT(ar.id) as rating_count
-            FROM apis a LEFT JOIN api_ratings ar ON a.id = ar.api_id
-            """
-            
-            # A: Exact(ish) name search
+        base_query = """
+        SELECT a.*, 
+               AVG(ar.latency_score) as avg_latency, AVG(ar.ease_of_use) as avg_ease_of_use,
+               AVG(ar.docs_quality) as avg_docs_quality, AVG(ar.cost_efficiency) as avg_cost_efficiency,
+               COUNT(ar.id) as rating_count
+        FROM apis a LEFT JOIN api_ratings ar ON a.id = ar.api_id
+        """
+
+        # Search logic
+        if search_query:
             params['search'] = f"%{search_query}%"
             name_query = f"{base_query} WHERE a.name LIKE :search GROUP BY a.id ORDER BY rating_count DESC"
             apis = DatabaseManager.execute_query(name_query, {'search': params['search']})
 
-            # B: If no direct name match, perform a broader semantic search.
             if not apis:
-                print("No direct name match found. Performing semantic search...")
                 similar_apis = EmbeddingManager.search_similar(search_query, 'api_doc')
                 if similar_apis:
                     api_ids = tuple([item['entity_id'] for item in similar_apis])
                     if api_ids:
                         semantic_query = f"{base_query} WHERE a.id IN :api_ids GROUP BY a.id ORDER BY rating_count DESC"
                         apis = DatabaseManager.execute_query(semantic_query, {'api_ids': api_ids})
-
-        # If there's no search query, just fetch all APIs.
         else:
             query = f"""
             SELECT a.*, 
@@ -623,10 +612,47 @@ def get_apis():
             'page': page,
             'per_page': per_page
         })
-        
+
     except Exception as e:
         logger.error(f"Get APIs error: {e}")
         return jsonify({'error': 'Failed to fetch APIs'}), 500
+
+# --- 2. Agentic discovery POST route ---
+@app.route('/api/apis/discover', methods=['POST'])
+def discover_apis():
+    """
+    Discover new APIs from the web using the agent, store them, and return newly found APIs.
+    Expects JSON: { "search": "query string" }
+    """
+    try:
+        data = request.get_json()
+        search_query = data.get('search', '')
+        if not search_query:
+            return jsonify({'error': 'Missing search query'}), 400
+
+        agent = ApiDiscoveryAgent()
+        agent.run(search_query)
+
+        # After agent run, fetch newly added APIs (by search query)
+        params = {'search': f"%{search_query}%"}
+        query = """
+        SELECT a.*, 
+               AVG(ar.latency_score) as avg_latency, AVG(ar.ease_of_use) as avg_ease_of_use,
+               AVG(ar.docs_quality) as avg_docs_quality, AVG(ar.cost_efficiency) as avg_cost_efficiency,
+               COUNT(ar.id) as rating_count
+        FROM apis a LEFT JOIN api_ratings ar ON a.id = ar.api_id
+        WHERE a.name LIKE :search
+        GROUP BY a.id ORDER BY rating_count DESC
+        """
+        apis = DatabaseManager.execute_query(query, params)
+
+        return jsonify({
+            'apis': apis
+        })
+
+    except Exception as e:
+        logger.error(f"Discover APIs error: {e}")
+        return jsonify({'error': 'Failed to discover APIs'}), 500
 
 
 # --- OTHER ROUTES (Unchanged) ---

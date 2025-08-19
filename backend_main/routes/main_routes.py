@@ -22,15 +22,37 @@ main_bp = Blueprint('main_routes', __name__)
 @main_bp.route('/apis/fromdb', methods=['GET'])
 def get_apis():
     """
-    Get list of APIs from the database only.
-    Supports search, category, pagination.
+    Get a list of APIs from the database.
+    Supports 'fetch_all', search, category, and pagination.
     """
     try:
         search_query = request.args.get('search', '')
-        page = int(request.args.get('page', 1))
-        per_page = int(request.args.get('per_page', 20))
+        category = request.args.get('category')
+        fetch_all = request.args.get('fetch_all', 'false').lower() == 'true'
 
-        # Build the base query with aggregated ratings
+        # Build Query Conditions (same as before)
+        where_clauses = []
+        params = {}
+
+        if search_query:
+            where_clauses.append("(a.name LIKE :search OR a.description LIKE :search)")
+            params['search'] = f"%{search_query}%"
+        
+        if category and category != 'all':
+            where_clauses.append("a.category = :category")
+            params['category'] = category
+
+        where_sql = ""
+        if where_clauses:
+            where_sql = "WHERE " + " AND ".join(where_clauses)
+
+        # Get Total Count (same as before)
+        count_query = f"SELECT COUNT(DISTINCT a.id) as total FROM apis a {where_sql}"
+        count_params = params.copy()
+        total_result = DatabaseManager.execute_query(count_query, count_params)
+        total_apis = total_result[0]['total'] if total_result else 0
+        
+        # Build the main query
         base_query = """
         SELECT a.*, 
                AVG(ar.latency_score) as avg_latency, AVG(ar.ease_of_use) as avg_ease_of_use,
@@ -38,32 +60,35 @@ def get_apis():
                COUNT(ar.id) as rating_count
         FROM apis a LEFT JOIN api_ratings ar ON a.id = ar.api_id
         """
+        query = f"""
+        {base_query}
+        {where_sql}
+        GROUP BY a.id
+        ORDER BY rating_count DESC, a.name
+        """
         
-        apis = []
-        if search_query:
-            # First, try a simple name search
-            name_query = f"{base_query} WHERE a.name LIKE :search GROUP BY a.id ORDER BY rating_count DESC"
-            apis = DatabaseManager.execute_query(name_query, {'search': f"%{search_query}%"})
+        if not fetch_all:
+            page = int(request.args.get('page', 1))
+            per_page = int(request.args.get('per_page', 10))
+            
+            params['limit'] = per_page
+            params['offset'] = (page - 1) * per_page
+            query += " LIMIT :limit OFFSET :offset"
 
-            # If no results, try a semantic search
-            if not apis:
-                similar_apis = EmbeddingManager.search_similar(search_query, 'api_doc')
-                if similar_apis:
-                    api_ids = tuple([item['entity_id'] for item in similar_apis])
-                    if api_ids:
-                        semantic_query = f"{base_query} WHERE a.id IN :api_ids GROUP BY a.id"
-                        apis = DatabaseManager.execute_query(semantic_query, {'api_ids': api_ids})
-        else:
-            # Default query to get all APIs, paginated
-            query = f"{base_query} GROUP BY a.id ORDER BY rating_count DESC, a.name LIMIT {per_page} OFFSET {(page - 1) * per_page}"
-            apis = DatabaseManager.execute_query(query)
-
-        return jsonify({'apis': apis, 'page': page, 'per_page': per_page})
+        apis = DatabaseManager.execute_query(query, params)
+        
+        # The response now handles both scenarios
+        return jsonify({
+            'apis': apis, 
+            'page': page if not fetch_all else None,
+            'per_page': per_page if not fetch_all else None,
+            'total_apis': total_apis,
+            'fetched_all': fetch_all
+        })
 
     except Exception as e:
         logger.error(f"Get APIs error: {e}")
         return jsonify({'error': 'Failed to fetch APIs'}), 500
-
 
 @main_bp.route('/apis/discover', methods=['POST'])
 def discover_apis():
@@ -336,3 +361,136 @@ def create_question():
     except Exception as e:
         logger.error(f"Create question error: {e}")
         return jsonify({'error': 'Failed to create question'}), 500
+
+@main_bp.route('/answers', methods=['POST'])
+@jwt_required()
+def create_answer():
+    """Create a new answer for a question"""
+    try:
+        data = request.get_json()
+        user_id = get_jwt_identity()
+        answer_id = str(uuid.uuid4())
+        
+        answer_data = {
+            'id': answer_id,
+            'question_id': data.get('question_id'),
+            'user_id': user_id,
+            'body_md': data.get('body_md', ''),
+            'created_at': datetime.now()
+        }
+
+        DatabaseManager.execute_query(
+            """INSERT INTO answers (id, question_id, user_id, body_md, created_at)
+               VALUES (:id, :question_id, :user_id, :body_md, :created_at)""",
+            answer_data
+        )
+
+        answer_text = answer_data['body_md']
+        embedding_vector = EmbeddingManager.create_embedding(answer_text)
+        EmbeddingManager.store_embedding('answer', answer_id, embedding_vector)
+
+        return jsonify({'message': 'Answer created successfully', 'answer_id': answer_id})
+
+    except Exception as e:
+        logger.error(f"Create answer error: {e}")
+        return jsonify({'error': 'Failed to create answer'}), 500
+    
+@main_bp.route('/answers/<question_id>', methods=['GET'])
+def get_answers(question_id):
+    """Get all answers for a question"""
+    try:
+        query = """
+        SELECT a.*, u.username,
+               SUM(CASE WHEN v.vote_type = 'up' THEN 1 ELSE 0 END) as upvotes,
+               SUM(CASE WHEN v.vote_type = 'down' THEN 1 ELSE 0 END) as downvotes
+        FROM answers a
+        JOIN users u ON a.user_id = u.id
+        LEFT JOIN votes v ON a.id = v.entity_id AND v.entity_type = 'answer'
+        WHERE a.question_id = :question_id
+        GROUP BY a.id
+        ORDER BY a.created_at ASC
+        """
+        answers = DatabaseManager.execute_query(query, {'question_id': question_id})
+        return jsonify({'answers': answers})
+
+    except Exception as e:
+        logger.error(f"Get answers error: {e}")
+        return jsonify({'error': 'Failed to fetch answers'}), 500
+
+@main_bp.route('/votes', methods=['POST'])
+@jwt_required()
+def cast_vote():
+    """Cast a vote (up/down) on a question or answer"""
+    try:
+        data = request.get_json()
+        user_id = get_jwt_identity()
+        entity_type = data.get('entity_type')   # "question" or "answer"
+        entity_id = data.get('entity_id')
+        vote_type = data.get('vote_type')       # "up" or "down"
+
+        if entity_type not in ['question', 'answer'] or vote_type not in ['up', 'down']:
+            return jsonify({'error': 'Invalid entity_type or vote_type'}), 400
+
+        # Check if user already voted → update instead of duplicate
+        existing_vote = DatabaseManager.execute_query(
+            """SELECT id FROM votes 
+               WHERE user_id = :user_id AND entity_id = :entity_id AND entity_type = :entity_type""",
+            {'user_id': user_id, 'entity_id': entity_id, 'entity_type': entity_type}
+        )
+
+        if existing_vote:
+            # Update existing vote
+            DatabaseManager.execute_query(
+                """UPDATE votes 
+                   SET vote_type = :vote_type, created_at = :created_at
+                   WHERE id = :id""",
+                {'vote_type': vote_type, 'created_at': datetime.now(), 'id': existing_vote[0]['id']}
+            )
+            return jsonify({'message': 'Vote updated successfully'})
+        else:
+            # Insert new vote
+            vote_id = str(uuid.uuid4())
+            DatabaseManager.execute_query(
+                """INSERT INTO votes (id, user_id, entity_type, entity_id, vote_type, created_at)
+                   VALUES (:id, :user_id, :entity_type, :entity_id, :vote_type, :created_at)""",
+                {
+                    'id': vote_id,
+                    'user_id': user_id,
+                    'entity_type': entity_type,
+                    'entity_id': entity_id,
+                    'vote_type': vote_type,
+                    'created_at': datetime.now()
+                }
+            )
+            return jsonify({'message': 'Vote cast successfully', 'vote_id': vote_id})
+
+    except Exception as e:
+        logger.error(f"Vote error: {e}")
+        return jsonify({'error': 'Failed to cast vote'}), 500
+
+@main_bp.route('/questions/<question_id>/resolve', methods=['POST'])
+@jwt_required()
+def toggle_question_resolved(question_id):
+    """Mark a question as resolved or unresolved"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        resolved = data.get('resolved', True)
+
+        # Ensure only author can toggle
+        result = DatabaseManager.execute_query(
+            "SELECT user_id FROM questions WHERE id = :id", {"id": question_id}
+        )
+        if not result or result[0]['user_id'] != user_id:
+            return jsonify({'error': 'Not authorized'}), 403
+
+        DatabaseManager.execute_query(
+            "UPDATE questions SET resolved = :resolved, updated_at = :updated_at WHERE id = :id",
+            {"resolved": resolved, "updated_at": datetime.now(), "id": question_id}
+        )
+
+        return jsonify({'message': 'Question updated', 'resolved': resolved})
+    except Exception as e:
+        logger.error(f"Toggle resolved error: {e}")
+        return jsonify({'error': 'Failed to update question'}), 500
+

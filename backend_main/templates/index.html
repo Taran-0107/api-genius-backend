@@ -37,6 +37,7 @@
             </div>
             <nav class="flex-1 px-4 py-4 space-y-2">
                 <a href="#" @click.prevent="activeTab = 'discover'" :class="{ 'sidebar-link-active': activeTab === 'discover' }" class="sidebar-link flex items-center px-4 py-2 text-gray-700 rounded-md">Discover APIs</a>
+                <a href="#" @click.prevent="activeTab = 'compare'" :class="{ 'sidebar-link-active': activeTab === 'compare' }" class="sidebar-link flex items-center px-4 py-2 text-gray-700 rounded-md">Compare APIs</a>
                 <a href="#" @click.prevent="activeTab = 'community'" :class="{ 'sidebar-link-active': activeTab === 'community' }" class="sidebar-link flex items-center px-4 py-2 text-gray-700 rounded-md">Community Q&A</a>
                 <a href="#" @click.prevent="activeTab = 'assistant'" :class="{ 'sidebar-link-active': activeTab === 'assistant' }" class="sidebar-link flex items-center px-4 py-2 text-gray-700 rounded-md">AI Assistant</a>
                 <a href="#" @click.prevent="activeTab = 'keyManager'" :class="{ 'sidebar-link-active': activeTab === 'keyManager' }" class="sidebar-link flex items-center px-4 py-2 text-gray-700 rounded-md">API Key Manager</a>
@@ -65,6 +66,97 @@
                             <button @click="browseAllApis()" class="bg-indigo-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-indigo-600">Browse All</button>
                         </div>
                         <div id="apiListContainer"></div>
+                    </div>
+
+                    <!-- Compare APIs Tab -->
+                    <div x-show="activeTab === 'compare'">
+                        <h1 class="text-3xl font-bold mb-6">AI-Powered API Comparison</h1>
+                        <p class="text-gray-600 mb-6">Get intelligent API recommendations and comparisons based on your specific needs.</p>
+                        
+                        <!-- Basic Comparison Section -->
+                        <div class="bg-white p-6 rounded-lg shadow-md mb-6">
+                            <h2 class="text-xl font-semibold mb-4">🔍 Quick API Comparison</h2>
+                            <div class="space-y-4">
+                                <textarea x-model="comparison.basicQuery" placeholder="Describe your task... e.g., 'I need to integrate payment processing for my e-commerce website'" class="w-full p-3 border rounded-lg" rows="3" :disabled="!user"></textarea>
+                                <button @click="runBasicComparison()" class="w-full bg-indigo-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-indigo-700" :disabled="!user || comparison.loading">
+                                    <span x-show="!comparison.loading">Compare APIs</span>
+                                    <span x-show="comparison.loading">Analyzing...</span>
+                                </button>
+                                <p x-show="!user" class="text-sm text-red-500 text-center">Please log in to use API comparison features.</p>
+                            </div>
+                        </div>
+
+                        <!-- Advanced Comparison Section -->
+                        <div class="bg-white p-6 rounded-lg shadow-md mb-6">
+                            <h2 class="text-xl font-semibold mb-4">⚙️ Advanced API Comparison</h2>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div class="space-y-4">
+                                    <textarea x-model="comparison.advancedQuery" placeholder="Describe your requirements in detail..." class="w-full p-3 border rounded-lg" rows="4" :disabled="!user"></textarea>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Categories (optional)</label>
+                                        <div class="space-y-2 max-h-32 overflow-y-auto border rounded-lg p-2">
+                                            <template x-for="category in availableCategories" :key="category.category">
+                                                <label class="flex items-center space-x-2">
+                                                    <input type="checkbox" :value="category.category" x-model="comparison.selectedCategories" class="rounded">
+                                                    <span class="text-sm" x-text="`${category.category} (${category.api_count})`"></span>
+                                                </label>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="space-y-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Minimum Ease of Use (1-5)</label>
+                                        <input type="range" min="0" max="5" step="0.5" x-model="comparison.minEaseOfUse" class="w-full">
+                                        <span class="text-sm text-gray-500" x-text="`${comparison.minEaseOfUse}/5`"></span>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Minimum Documentation Quality (1-5)</label>
+                                        <input type="range" min="0" max="5" step="0.5" x-model="comparison.minDocsQuality" class="w-full">
+                                        <span class="text-sm text-gray-500" x-text="`${comparison.minDocsQuality}/5`"></span>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Maximum Results</label>
+                                        <select x-model="comparison.limit" class="w-full p-2 border rounded-lg">
+                                            <option value="5">5 APIs</option>
+                                            <option value="10" selected>10 APIs</option>
+                                            <option value="15">15 APIs</option>
+                                            <option value="20">20 APIs</option>
+                                        </select>
+                                    </div>
+                                    <button @click="runAdvancedComparison()" class="w-full bg-purple-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-purple-700" :disabled="!user || comparison.loading">
+                                        <span x-show="!comparison.loading">Advanced Compare</span>
+                                        <span x-show="comparison.loading">Analyzing...</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Categories Overview -->
+                        <div class="bg-white p-6 rounded-lg shadow-md mb-6">
+                            <h2 class="text-xl font-semibold mb-4">📊 Available API Categories</h2>
+                            <button @click="loadCategories()" class="mb-4 bg-gray-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-gray-700" :disabled="comparison.categoriesLoading">
+                                <span x-show="!comparison.categoriesLoading">Refresh Categories</span>
+                                <span x-show="comparison.categoriesLoading">Loading...</span>
+                            </button>
+                            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                                <template x-for="category in availableCategories" :key="category.category">
+                                    <div class="bg-gray-100 p-3 rounded-lg text-center">
+                                        <div class="font-medium text-sm" x-text="category.category"></div>
+                                        <div class="text-xs text-gray-500" x-text="`${category.api_count} APIs`"></div>
+                                    </div>
+                                </template>
+                                <template x-if="availableCategories.length === 0">
+                                    <div class="col-span-full text-center text-gray-500 py-4">No categories loaded yet. Click "Refresh Categories" to load.</div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Results Section -->
+                        <div x-show="comparison.results" class="bg-white p-6 rounded-lg shadow-md">
+                            <h2 class="text-xl font-semibold mb-4">🎯 Comparison Results</h2>
+                            <div id="comparisonResultsContainer" class="space-y-6"></div>
+                        </div>
                     </div>
 
                     <!-- Community Tab -->
@@ -225,6 +317,19 @@
             login: { username: '', password: '' },
             register: { username: '', email: '', password: '' },
             codeGen: { task: '', language: 'python', result: '' },
+            // API Comparison state
+            comparison: {
+                basicQuery: '',
+                advancedQuery: '',
+                selectedCategories: [],
+                minEaseOfUse: 0,
+                minDocsQuality: 0,
+                limit: 10,
+                loading: false,
+                categoriesLoading: false,
+                results: null
+            },
+            availableCategories: [],
 
             // Init
             init() {
@@ -239,6 +344,8 @@
                 this.$watch('activeTab', (value) => {
                     if (value === 'community') {
                         this.fetchQuestions();
+                    } else if (value === 'compare') {
+                        this.loadCategories();
                     }
                 });
             },
@@ -359,6 +466,169 @@
                 localStorage.setItem('apiKeys', JSON.stringify(this.apiKeys));
             },
 
+            // API Comparison
+            async loadCategories() {
+                this.comparison.categoriesLoading = true;
+                try {
+                    const data = await this.apiFetch('/ai/get-categories');
+                    this.availableCategories = data.categories || [];
+                } catch (err) {
+                    alert(`Failed to load categories: ${err.message}`);
+                } finally {
+                    this.comparison.categoriesLoading = false;
+                }
+            },
+
+            async runBasicComparison() {
+                if (!this.comparison.basicQuery.trim()) return;
+                
+                this.comparison.loading = true;
+                this.comparison.results = null;
+                
+                try {
+                    const data = await this.apiFetch('/ai/compare-apis', {
+                        method: 'POST',
+                        body: JSON.stringify({ query: this.comparison.basicQuery })
+                    });
+                    
+                    this.comparison.results = data;
+                    this.renderComparisonResults(data);
+                } catch (err) {
+                    alert(`Comparison failed: ${err.message}`);
+                } finally {
+                    this.comparison.loading = false;
+                }
+            },
+
+            async runAdvancedComparison() {
+                if (!this.comparison.advancedQuery.trim()) return;
+                
+                this.comparison.loading = true;
+                this.comparison.results = null;
+                
+                try {
+                    const payload = {
+                        query: this.comparison.advancedQuery,
+                        categories: this.comparison.selectedCategories,
+                        min_ease_of_use: parseFloat(this.comparison.minEaseOfUse),
+                        min_docs_quality: parseFloat(this.comparison.minDocsQuality),
+                        limit: parseInt(this.comparison.limit)
+                    };
+                    
+                    const data = await this.apiFetch('/ai/compare-apis-advanced', {
+                        method: 'POST',
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    this.comparison.results = data;
+                    this.renderComparisonResults(data);
+                } catch (err) {
+                    alert(`Advanced comparison failed: ${err.message}`);
+                } finally {
+                    this.comparison.loading = false;
+                }
+            },
+
+            renderComparisonResults(data) {
+                const container = document.getElementById('comparisonResultsContainer');
+                container.innerHTML = '';
+                
+                // Query Info
+                const queryInfo = document.createElement('div');
+                queryInfo.className = 'bg-gray-50 p-4 rounded-lg mb-4';
+                queryInfo.innerHTML = `
+                    <h3 class="font-semibold text-lg mb-2">Query: "${data.query}"</h3>
+                    <p class="text-sm text-gray-600">Found ${data.total_apis_found} relevant APIs</p>
+                    ${data.filters_applied ? `<p class="text-xs text-gray-500 mt-1">Filters: ${JSON.stringify(data.filters_applied)}</p>` : ''}
+                `;
+                container.appendChild(queryInfo);
+                
+                // LLM Comparison Analysis
+                if (data.comparison) {
+                    const analysisDiv = document.createElement('div');
+                    analysisDiv.className = 'bg-blue-50 p-4 rounded-lg mb-4';
+                    analysisDiv.innerHTML = `
+                        <h3 class="font-semibold text-lg mb-2">🤖 AI Analysis</h3>
+                        <div class="prose prose-sm max-w-none">${this.formatComparisonText(data.comparison)}</div>
+                    `;
+                    container.appendChild(analysisDiv);
+                }
+                
+                // API Cards
+                if (data.apis && data.apis.length > 0) {
+                    const apisDiv = document.createElement('div');
+                    apisDiv.innerHTML = '<h3 class="font-semibold text-lg mb-4">📋 Matching APIs</h3>';
+                    
+                    const grid = document.createElement('div');
+                    grid.className = 'grid grid-cols-1 lg:grid-cols-2 gap-4';
+                    
+                    data.apis.forEach((api, index) => {
+                        const card = document.createElement('div');
+                        card.className = 'bg-white border-2 border-gray-200 p-4 rounded-lg hover:border-indigo-300 transition';
+                        
+                        const ratings = this.formatApiRatings(api);
+                        
+                        card.innerHTML = `
+                            <div class="flex justify-between items-start mb-2">
+                                <h4 class="font-bold text-lg text-indigo-700">${api.name}</h4>
+                                <span class="bg-indigo-100 text-indigo-800 text-xs font-medium px-2 py-1 rounded">#${index + 1}</span>
+                            </div>
+                            <p class="text-sm text-gray-600 mb-2">${api.description || 'No description available'}</p>
+                            <p class="text-xs text-gray-500 mb-2">Category: ${api.category || 'Unknown'}</p>
+                            ${ratings}
+                            <div class="mt-4 flex space-x-2">
+                                <button onclick="window.apiGeniusInstance.openDetailModal(${JSON.stringify(api).replace(/"/g, '&quot;')})" class="text-sm bg-gray-200 font-semibold py-1 px-3 rounded-md hover:bg-gray-300">Details</button>
+                                <button onclick="window.apiGeniusInstance.openCodeGenerator(${JSON.stringify(api).replace(/"/g, '&quot;')})" class="text-sm bg-indigo-600 text-white font-semibold py-1 px-3 rounded-md hover:bg-indigo-700">Code</button>
+                            </div>
+                        `;
+                        grid.appendChild(card);
+                    });
+                    
+                    apisDiv.appendChild(grid);
+                    container.appendChild(apisDiv);
+                }
+                
+                // Generated SQL (for debugging)
+                if (data.generated_sql) {
+                    const sqlDiv = document.createElement('details');
+                    sqlDiv.className = 'mt-4';
+                    sqlDiv.innerHTML = `
+                        <summary class="cursor-pointer font-medium text-gray-700 hover:text-gray-900">Show Generated SQL Query</summary>
+                        <pre class="mt-2 bg-gray-100 p-3 rounded text-xs overflow-auto"><code>${data.generated_sql}</code></pre>
+                    `;
+                    container.appendChild(sqlDiv);
+                }
+            },
+
+            formatComparisonText(text) {
+                // Convert markdown-like formatting to HTML
+                return text
+                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\n\n/g, '</p><p>')
+                    .replace(/\n(\d+\.\s)/g, '</p><p>$1')
+                    .replace(/^/, '<p>')
+                    .replace(/$/, '</p>');
+            },
+
+            formatApiRatings(api) {
+                if (!api.rating_count || api.rating_count === 0) {
+                    return '<p class="text-xs text-gray-400">No ratings available</p>';
+                }
+                
+                const ratings = [];
+                if (api.avg_ease_of_use) ratings.push(`Ease: ${parseFloat(api.avg_ease_of_use).toFixed(1)}/5`);
+                if (api.avg_docs_quality) ratings.push(`Docs: ${parseFloat(api.avg_docs_quality).toFixed(1)}/5`);
+                if (api.avg_cost_efficiency) ratings.push(`Cost: ${parseFloat(api.avg_cost_efficiency).toFixed(1)}/5`);
+                if (api.avg_latency) ratings.push(`Speed: ${parseFloat(api.avg_latency).toFixed(1)}/5`);
+                
+                return `
+                    <div class="text-xs text-gray-600">
+                        <p class="font-medium">${api.rating_count} user ratings:</p>
+                        <p>${ratings.join(' • ')}</p>
+                    </div>
+                `;
+            },
+
             // Rendering & Modals
             openDetailModal(api) {
                 this.selectedApi = api;
@@ -430,6 +700,11 @@
 
     document.addEventListener('alpine:init', () => {
         Alpine.data('apiGeniusTester', apiGeniusTester);
+    });
+    
+    // Make Alpine instance globally accessible for dynamically created buttons
+    document.addEventListener('alpine:initialized', () => {
+        window.apiGeniusInstance = Alpine.$data(document.querySelector('[x-data="apiGeniusTester"]'));
     });
     </script>
 </body>

@@ -281,6 +281,205 @@ def recommend_apis_route():
         logger.error(f"API recommendation route error: {e}")
         return jsonify({'error': 'Failed to recommend APIs'}), 500
 
+
+@main_bp.route('/ai/compare-apis', methods=['POST'])
+@jwt_required()
+def compare_apis_route():
+    """Compare APIs based on user query and provide ranked recommendations."""
+    try:
+        data = request.get_json()
+        user_query = data.get('query', '')
+        if not user_query:
+            return jsonify({'error': 'Query is required'}), 400
+
+        # Step 1: Get all available categories from database
+        categories_result = DatabaseManager.execute_query(
+            "SELECT DISTINCT category FROM apis WHERE category IS NOT NULL AND category != ''",
+            {}
+        )
+        categories = [row['category'] for row in categories_result]
+        
+        if not categories:
+            return jsonify({'error': 'No categories found in database'}), 404
+
+        # Step 2: Use LLM to create SQL query based on user intent and categories
+        sql_query = LLMService.create_category_sql_query(user_query, categories)
+        
+        # Step 3: Execute the generated SQL query to fetch relevant APIs
+        try:
+            apis = DatabaseManager.execute_query(sql_query, {})
+        except Exception as sql_error:
+            logger.error(f"Generated SQL query failed: {sql_error}")
+            # Fallback to simple search if generated query fails
+            fallback_query = """
+            SELECT a.*, 
+                   AVG(ar.latency_score) as avg_latency, 
+                   AVG(ar.ease_of_use) as avg_ease_of_use,
+                   AVG(ar.docs_quality) as avg_docs_quality, 
+                   AVG(ar.cost_efficiency) as avg_cost_efficiency,
+                   COUNT(ar.id) as rating_count
+            FROM apis a 
+            LEFT JOIN api_ratings ar ON a.id = ar.api_id
+            WHERE a.description LIKE :search OR a.name LIKE :search
+            GROUP BY a.id 
+            ORDER BY rating_count DESC, a.name 
+            LIMIT 10
+            """
+            search_term = f"%{user_query}%"
+            apis = DatabaseManager.execute_query(fallback_query, {'search': search_term})
+
+        if not apis:
+            return jsonify({'error': 'No relevant APIs found for your query'}), 404
+
+        # Step 4: Format API data for LLM comparison
+        apis_data = ""
+        for i, api in enumerate(apis, 1):
+            rating_info = ""
+            if api.get('avg_ease_of_use'):
+                rating_info = f" (Ease: {api['avg_ease_of_use']:.1f}, Docs: {api.get('avg_docs_quality', 0):.1f}, Cost: {api.get('avg_cost_efficiency', 0):.1f})"
+            
+            apis_data += f"{i}. {api['name']}: {api['description']}{rating_info}\n"
+
+        # Step 5: Use LLM to compare and rank APIs
+        comparison_result = LLMService.compare_apis_for_task(user_query, apis_data)
+
+        return jsonify({
+            'query': user_query,
+            'generated_sql': sql_query,
+            'apis': apis,
+            'comparison': comparison_result,
+            'total_apis_found': len(apis)
+        })
+        
+    except Exception as e:
+        logger.error(f"API comparison route error: {e}")
+        return jsonify({'error': 'Failed to compare APIs'}), 500
+
+
+@main_bp.route('/ai/get-categories', methods=['GET'])
+def get_categories_route():
+    """Get all available API categories from the database."""
+    try:
+        categories_result = DatabaseManager.execute_query(
+            """SELECT category, COUNT(*) as api_count 
+               FROM apis 
+               WHERE category IS NOT NULL AND category != '' 
+               GROUP BY category 
+               ORDER BY api_count DESC, category""",
+            {}
+        )
+        
+        return jsonify({
+            'categories': categories_result,
+            'total_categories': len(categories_result)
+        })
+        
+    except Exception as e:
+        logger.error(f"Get categories route error: {e}")
+        return jsonify({'error': 'Failed to fetch categories'}), 500
+
+
+@main_bp.route('/ai/compare-apis-advanced', methods=['POST'])
+@jwt_required()
+def compare_apis_advanced_route():
+    """
+    Advanced API comparison with custom filters and detailed analysis.
+    Allows users to specify categories, minimum ratings, and other criteria.
+    """
+    try:
+        data = request.get_json()
+        user_query = data.get('query', '')
+        specified_categories = data.get('categories', [])  # Optional: user can specify categories
+        min_ease_of_use = data.get('min_ease_of_use', 0)
+        min_docs_quality = data.get('min_docs_quality', 0)
+        limit = min(data.get('limit', 10), 20)  # Cap at 20 for performance
+        
+        if not user_query:
+            return jsonify({'error': 'Query is required'}), 400
+
+        # Build dynamic query based on filters
+        where_clauses = []
+        params = {}
+        
+        if specified_categories:
+            category_placeholders = ', '.join([f':cat{i}' for i in range(len(specified_categories))])
+            where_clauses.append(f"a.category IN ({category_placeholders})")
+            for i, cat in enumerate(specified_categories):
+                params[f'cat{i}'] = cat
+        
+        # Add rating filters if specified
+        having_clauses = []
+        if min_ease_of_use > 0:
+            having_clauses.append("AVG(ar.ease_of_use) >= :min_ease")
+            params['min_ease'] = min_ease_of_use
+        if min_docs_quality > 0:
+            having_clauses.append("AVG(ar.docs_quality) >= :min_docs")
+            params['min_docs'] = min_docs_quality
+
+        # Construct the query
+        base_query = """
+        SELECT a.*, 
+               AVG(ar.latency_score) as avg_latency, 
+               AVG(ar.ease_of_use) as avg_ease_of_use,
+               AVG(ar.docs_quality) as avg_docs_quality, 
+               AVG(ar.cost_efficiency) as avg_cost_efficiency,
+               COUNT(ar.id) as rating_count
+        FROM apis a 
+        LEFT JOIN api_ratings ar ON a.id = ar.api_id
+        """
+        
+        if where_clauses:
+            base_query += " WHERE " + " AND ".join(where_clauses)
+        
+        base_query += " GROUP BY a.id"
+        
+        if having_clauses:
+            base_query += " HAVING " + " AND ".join(having_clauses)
+        
+        base_query += f" ORDER BY rating_count DESC, a.name LIMIT {limit}"
+        
+        apis = DatabaseManager.execute_query(base_query, params)
+
+        if not apis:
+            return jsonify({'error': 'No APIs found matching your criteria'}), 404
+
+        # Format API data for LLM comparison with more details
+        apis_data = ""
+        for i, api in enumerate(apis, 1):
+            rating_info = ""
+            if api.get('rating_count', 0) > 0:
+                rating_info = f" | Ratings: {api['rating_count']} users | "
+                rating_info += f"Ease: {api.get('avg_ease_of_use', 0):.1f}/5, "
+                rating_info += f"Docs: {api.get('avg_docs_quality', 0):.1f}/5, "
+                rating_info += f"Cost: {api.get('avg_cost_efficiency', 0):.1f}/5, "
+                rating_info += f"Latency: {api.get('avg_latency', 0):.1f}/5"
+            
+            homepage = f" | Homepage: {api['homepage_url']}" if api.get('homepage_url') else ""
+            
+            apis_data += f"{i}. {api['name']} ({api['category']})\n"
+            apis_data += f"   Description: {api['description']}\n"
+            apis_data += f"   {rating_info}{homepage}\n\n"
+
+        # Get enhanced comparison from LLM
+        comparison_result = LLMService.compare_apis_for_task(user_query, apis_data)
+
+        return jsonify({
+            'query': user_query,
+            'filters_applied': {
+                'categories': specified_categories,
+                'min_ease_of_use': min_ease_of_use,
+                'min_docs_quality': min_docs_quality,
+                'limit': limit
+            },
+            'apis': apis,
+            'comparison': comparison_result,
+            'total_apis_found': len(apis)
+        })
+        
+    except Exception as e:
+        logger.error(f"Advanced API comparison route error: {e}")
+        return jsonify({'error': 'Failed to perform advanced API comparison'}), 500
+
 # --- Question & Answer Routes ---
 
 @main_bp.route('/questions', methods=['GET'])
@@ -494,3 +693,53 @@ def toggle_question_resolved(question_id):
         logger.error(f"Toggle resolved error: {e}")
         return jsonify({'error': 'Failed to update question'}), 500
 
+@main_bp.route('/apis/rate', methods=['POST'])
+@jwt_required()
+def rate_api():
+    """Submit or update a user's rating for an API"""
+    try:
+        data = request.get_json()
+        user_id = get_jwt_identity()
+        api_id = data.get('api_id')
+
+        if not api_id:
+            return jsonify({'error': 'api_id is required'}), 400
+
+        rating_data = {
+            'latency_score': data.get('latency_score'),
+            'ease_of_use': data.get('ease_of_use'),
+            'docs_quality': data.get('docs_quality'),
+            'cost_efficiency': data.get('cost_efficiency'),
+        }
+
+        # Check if user has already rated
+        existing = DatabaseManager.execute_query(
+            "SELECT id FROM api_ratings WHERE api_id = :api_id AND user_id = :user_id",
+            {'api_id': api_id, 'user_id': user_id}
+        )
+
+        if existing:
+            DatabaseManager.execute_query(
+                """UPDATE api_ratings
+                   SET latency_score = :latency_score,
+                       ease_of_use = :ease_of_use,
+                       docs_quality = :docs_quality,
+                       cost_efficiency = :cost_efficiency,
+                       created_at = :created_at
+                   WHERE id = :id""",
+                {**rating_data, 'created_at': datetime.now(), 'id': existing[0]['id']}
+            )
+            return jsonify({'message': 'Rating updated successfully'})
+        else:
+            rating_id = str(uuid.uuid4())
+            DatabaseManager.execute_query(
+                """INSERT INTO api_ratings
+                   (id, api_id, user_id, latency_score, ease_of_use, docs_quality, cost_efficiency, created_at)
+                   VALUES (:id, :api_id, :user_id, :latency_score, :ease_of_use, :docs_quality, :cost_efficiency, :created_at)""",
+                {**rating_data, 'id': rating_id, 'api_id': api_id, 'user_id': user_id, 'created_at': datetime.now()}
+            )
+            return jsonify({'message': 'Rating submitted successfully', 'rating_id': rating_id})
+
+    except Exception as e:
+        logger.error(f"Rate API error: {e}")
+        return jsonify({'error': 'Failed to submit rating'}), 500

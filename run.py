@@ -14,4 +14,4 @@ app = create_app(config_name)
 if __name__ == '__main__':
     # Run the application
     # Host and port can be configured in your config.py or directly here
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5001)
